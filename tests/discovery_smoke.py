@@ -8,13 +8,14 @@ import sys
 import threading
 
 
-h265_enabled = len(sys.argv) > 3
-name = "UxPlay Mini discovery H265 test" if h265_enabled else "UxPlay Mini discovery test"
+options = sys.argv[3:]
+assert set(options) <= {"--h265", "--no-audio"}, options
+h265_enabled = "--h265" in options
+no_audio = "--no-audio" in options
+name = "UxPlay Mini discovery" + (" H265" if h265_enabled else "") + (" no-audio" if no_audio else "") + " test"
 ready = queue.Queue()
 logs = []
-args = [sys.argv[1], "--name", name, "--run-seconds", "12"]
-if h265_enabled:
-    args.append(sys.argv[3])
+args = [sys.argv[1], *options, "--name", name, "--run-seconds", "12"]
 server = subprocess.Popen(
     args,
     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
@@ -50,6 +51,10 @@ try:
     assert match, output
     features = int(match[1], 16) | (int(match[2], 16) << 32)
     assert bool(features & (1 << 42)) == h265_enabled, output
+    # DNS-SD and /info must both retain audio negotiation capabilities when
+    # audio output is disabled, regardless of FFmpeg being linked or not.
+    for bit in (9, 18, 19, 20, 21):
+        assert features & (1 << bit), (bit, output)
 finally:
     if client and client.poll() is None:
         client.kill()
@@ -58,4 +63,4 @@ finally:
     server.wait(timeout=5)
     thread.join(timeout=1)
 assert server.returncode == 0, "".join(logs)
-print(f"Independent DNS-SD client resolved AirPlay port and TXT records (H265: {h265_enabled})")
+print(f"Independent DNS-SD client resolved AirPlay port and TXT records with audio capabilities (H265: {h265_enabled}, --no-audio: {no_audio})")

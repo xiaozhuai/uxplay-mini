@@ -76,6 +76,12 @@ Configuration options:
 
 ## Usage
 
+Use `--no-audio` for video-only output: audio packets are accepted and discarded
+without decoding or outgoing audio RTP/RTCP. AirPlay audio capability negotiation
+is intentionally preserved; removing those capabilities can leave iPhone stuck
+connecting until it disconnects after about a minute. The same behavior applies
+to builds with `UXPLAY_MINI_WITH_AUDIO=OFF`, which do not link FFmpeg at all.
+
 ```sh
 ./build/binary/arm64-macos-release/uxplay-mini \
   -n "UxPlay Mini" --host 127.0.0.1 \
@@ -146,6 +152,8 @@ L16 byte order, audio without NTP, clock jitter, audio sample-timestamp wraparou
 AAC-ELD/AAC-LC initialization, actual ALAC decoding, UDP transmission and reception,
 incremental RTSP parsing, binary property lists, the pairing setup endpoint,
 HLS rejection, default and opt-in H.265 capability bits and SDP, and process exit.
+Explicit `--no-audio` tests check that AirPlay audio capabilities remain available
+in `/info` and DNS-SD TXT records while outgoing audio is omitted from SDP and logs.
 On macOS, an independent system `dns-sd` client also checks AirPlay service ports,
 TXT records, and the HEVC capability bit.
 

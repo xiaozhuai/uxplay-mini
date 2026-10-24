@@ -29,14 +29,15 @@ def response(stream):
     return status, headers, body
 
 
-def run(binary, audio_enabled, h265_option=None):
+def run(binary, audio_enabled, options):
+    assert set(options) <= {"--h265", "--no-audio"}, options
+    h265_enabled = "--h265" in options
+    audio_output_enabled = audio_enabled and "--no-audio" not in options
     lines = []
     ports = queue.Queue()
     with tempfile.TemporaryDirectory(prefix="uxplay-mini-test-") as folder:
         sdp = pathlib.Path(folder) / "receiver.sdp"
-        args = [binary, "--no-mdns", "--run-seconds", "15", "--sdp", str(sdp)]
-        if h265_option:
-            args.append(h265_option)
+        args = [binary, *options, "--no-mdns", "--run-seconds", "15", "--sdp", str(sdp)]
         child = subprocess.Popen(
             args,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
@@ -71,9 +72,13 @@ def run(binary, audio_enabled, h265_option=None):
                 assert info["displays"][0]["maxFPS"] == 60
                 assert info["features"] & (1 << 7)  # mirroring
                 assert not info["features"] & (1 << 4)  # no HLS
-                assert bool(info["features"] & (1 << 42)) == bool(h265_option)
+                assert bool(info["features"] & (1 << 42)) == h265_enabled
                 assert "audioFormats" in info
-                assert bool(info["features"] & (1 << 9)) == audio_enabled
+                # Output policy must not change the AirPlay handshake. Removing
+                # these bits makes iPhone spin and disconnect after ~59 seconds.
+                # This also covers builds with UXPLAY_MINI_WITH_AUDIO=OFF.
+                for bit in (9, 18, 19, 20, 21):
+                    assert info["features"] & (1 << bit), f"missing audio capability bit {bit}"
                 sock.sendall(b"GET_PARAMETER * RTSP/1.0\r\nCSeq: 3\r\nContent-Type: text/parameters\r\nContent-Length: 8\r\n\r\nvolume\r\n")
                 status, headers, body = response(stream)
                 assert status == "RTSP/1.0 200 OK" and b"volume:" in body
@@ -100,10 +105,10 @@ def run(binary, audio_enabled, h265_option=None):
                 stream.close()
             text = sdp.read_text()
             assert "a=rtpmap:96 H264/90000" in text
-            assert ("a=rtpmap:98 H265/90000" in text) == bool(h265_option)
-            expected_payloads = "96 98" if h265_option else "96"
+            assert ("a=rtpmap:98 H265/90000" in text) == h265_enabled
+            expected_payloads = "96 98" if h265_enabled else "96"
             assert f"m=video 5000 RTP/AVP {expected_payloads}" in text.splitlines()
-            assert ("L16/44100/2" in text) == audio_enabled
+            assert ("L16/44100/2" in text) == audio_output_enabled
         except Exception:
             sys.stderr.write("".join(lines))
             raise
@@ -117,8 +122,9 @@ def run(binary, audio_enabled, h265_option=None):
                 raise RuntimeError("receiver did not shut down cleanly")
             reader.join(timeout=1)
         assert child.returncode == 0, "".join(lines)
-    print(f"TCP RTSP, binary plist, pairing/FairPlay setup, HLS rejection, SDP and shutdown passed (H265: {bool(h265_option)})")
+        assert any("Audio L16 RTP ->" in line for line in lines) == audio_output_enabled
+    print(f"TCP RTSP, stable AirPlay audio capabilities, pairing/FairPlay setup, HLS rejection, SDP and shutdown passed (H265: {h265_enabled}, audio output: {audio_output_enabled})")
 
 
 run(str(pathlib.Path(sys.argv[1]).resolve()), len(sys.argv) < 3 or sys.argv[2] == "1",
-    sys.argv[3] if len(sys.argv) > 3 else None)
+    sys.argv[3:])

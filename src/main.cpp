@@ -61,7 +61,7 @@ void help() {
         "  --device-id XX:XX:XX:XX:XX:XX  unique, stable receiver identity\n"
         "  --keyfile PATH         persistent pairing key (optional)\n"
         "  --sdp PATH             write receiver SDP for the outgoing streams\n"
-        "  --no-audio             video only; do not advertise audio support\n"
+        "  --no-audio             disable audio decoding and RTP output\n"
         "  --no-mdns              do not advertise services (diagnostic use)\n"
         "  --hold                 reject a second client while connected\n"
         "  -d, --debug            verbose protocol log\n"
@@ -166,7 +166,11 @@ struct Receiver {
         dnssd_set_airplay_features(dns.get(), 0, 0);
         dnssd_set_airplay_features(dns.get(), 4, 0);
         dnssd_set_airplay_features(dns.get(), 42, int(options.h265)); // SupportsScreenMultiCodec
-        if (!options.audio) for (int bit : {9, 18, 19, 20, 21}) dnssd_set_airplay_features(dns.get(), bit, 0);
+        // iPhone needs the normal audio capabilities to complete mirror setup,
+        // even for video-only output. Removing them leaves it connecting until
+        // it tears down the session after about a minute. --no-audio (including
+        // builds without FFmpeg) only discards audio in the callbacks below;
+        // keep accepting the protocol's audio setup and packets.
         start_server();
         write_sdp(options);
         log("Video RTP -> " + options.host + ":" + std::to_string(options.video_port));

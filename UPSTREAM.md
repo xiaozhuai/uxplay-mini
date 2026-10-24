@@ -22,6 +22,8 @@ Local changes:
 - Kept OpenSSL libcrypto and libplist for pairing, decryption and binary plists.
 - All platforms use libavcodec and libavutil for audio decoding. Video does not
   pass through a decoder, parser library or encoder.
+- Video-only mode retains AirPlay audio negotiation capabilities for iPhone
+  compatibility; it discards incoming audio without decoding or forwarding it.
 - Replaced pthread usage on Windows with Win32 threads, mutexes and condition
   variables. Unix platforms continue to use system pthreads.
 - Use IPPROTO_TCP directly for portable TCP keepalive socket-option levels.
