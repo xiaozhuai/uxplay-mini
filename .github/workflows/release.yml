@@ -1,0 +1,293 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TARGETS: '["windows-x64","macos-arm64","macos-x64","linux-x64"]'
+
+jobs:
+  build:
+    name: Build ${{ matrix.preset_prefix }}
+    runs-on: ${{matrix.runner}}
+    env:
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vendor/vcpkg/binary-cache,readwrite
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset_prefix: x64-windows-static
+            release_target: windows-x64
+            host_triplet: x64-windows-static
+            triplet: x64-windows-static
+            runner: windows-2022
+          - preset_prefix: arm64-macos
+            release_target: macos-arm64
+            triplet: arm64-osx
+            runner: macos-26
+          - preset_prefix: x64-macos
+            release_target: macos-x64
+            triplet: x64-osx
+            runner: macos-26
+          - preset_prefix: x64-linux
+            release_target: linux-x64
+            triplet: x64-linux
+            runner: ubuntu-26.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Validate release tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a stable version tag such as v0.1.0" >&2
+            exit 1
+          fi
+      - name: Checkout vcpkg
+        uses: actions/checkout@v7
+        with:
+          repository: xiaozhuai/vcpkg
+          ref: uxplay-mini
+          path: vendor/vcpkg
+      - name: Install System Dependencies (macOS)
+        if: ${{ startsWith(matrix.runner, 'macos-') }}
+        run: |
+          brew install nasm
+      - name: Install System Dependencies (Linux)
+        if: ${{ startsWith(matrix.runner, 'ubuntu-') }}
+        run: |
+          sudo apt-get install nasm
+      - name: Prepare vcpkg cache
+        id: vcpkg-cache-key
+        shell: bash
+        run: |
+          mkdir -p vendor/vcpkg/binary-cache vendor/vcpkg/downloads
+          printf 'revision=%s\n' "$(git -C vendor/vcpkg rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          printf 'image-version=%s\n' "${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            vendor/vcpkg/binary-cache
+            vendor/vcpkg/downloads
+          key: vcpkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.triplet }}-${{ matrix.host_triplet || 'default' }}-${{ steps.vcpkg-cache-key.outputs.image-version }}-${{ steps.vcpkg-cache-key.outputs.revision }}-${{ hashFiles('.github/workflows/ci.yml', '.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.triplet }}-${{ matrix.host_triplet || 'default' }}-${{ steps.vcpkg-cache-key.outputs.image-version }}-
+            vcpkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.triplet }}-${{ matrix.host_triplet || 'default' }}-
+      - name: Install dependencies
+        uses: actions/github-script@v8
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vendor/vcpkg
+          TARGET_TRIPLET: ${{ matrix.triplet }}
+          HOST_TRIPLET: ${{ matrix.host_triplet }}
+        with:
+          script: |
+            const path = require('node:path');
+            const windows = process.platform === 'win32';
+            const bootstrap = path.join(process.env.VCPKG_ROOT,
+              windows ? 'bootstrap-vcpkg.bat' : 'bootstrap-vcpkg.sh');
+            const vcpkg = path.join(process.env.VCPKG_ROOT, windows ? 'vcpkg.exe' : 'vcpkg');
+            await exec.exec(`"${bootstrap}"`);
+            const args = ['install', '--triplet', process.env.TARGET_TRIPLET,
+              '--clean-buildtrees-after-build', '--clean-packages-after-build', '--no-print-usage'];
+            if (process.env.HOST_TRIPLET) args.push('--host-triplet', process.env.HOST_TRIPLET);
+            args.push('openssl', 'llhttp', 'libplist', 'ffmpeg[core,avcodec]');
+            await exec.exec(`"${vcpkg}"`, args);
+      - name: Save vcpkg cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            vendor/vcpkg/binary-cache
+            vendor/vcpkg/downloads
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+      - name: Prepare build
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        if: ${{ startsWith(matrix.runner, 'windows-') }}
+        with:
+          arch: x64
+      - name: Build
+        uses: actions/github-script@v8
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vendor/vcpkg
+          PRESET_PREFIX: ${{ matrix.preset_prefix }}
+        with:
+          script: |
+            core.info('Build release');
+            const preset = `${process.env.PRESET_PREFIX}-release`;
+            const directory = `build/binary/${preset}`;
+            await exec.exec('cmake', ['--preset', preset, '-B', directory, '.']);
+            await exec.exec('cmake', ['--build', directory, '--target', 'all']);
+      - name: Package runtime
+        uses: actions/github-script@v8
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vendor/vcpkg
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TARGET: ${{ matrix.release_target }}
+          RELEASE_TRIPLET: ${{ matrix.triplet }}
+          RELEASE_BUILD_DIR: build/binary/${{ matrix.preset_prefix }}-release
+        with:
+          script: |
+            const assert = require('node:assert/strict');
+            const { createHash } = require('node:crypto');
+            const { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } = require('node:fs/promises');
+            const path = require('node:path');
+
+            const tag = process.env.RELEASE_TAG;
+            const target = process.env.RELEASE_TARGET;
+            assert.match(tag, /^v[0-9]+\.[0-9]+\.[0-9]+$/);
+            assert.ok(JSON.parse(process.env.RELEASE_TARGETS).includes(target), 'Unknown release target');
+            const binary = target.startsWith('windows-') ? 'uxplay-mini.exe' : 'uxplay-mini';
+            const executable = path.resolve(process.env.RELEASE_BUILD_DIR, binary);
+            const regularFile = async (file) => {
+              const stat = await lstat(file);
+              assert.ok(stat.isFile() && stat.size > 0, `Missing or non-regular release file: ${file}`);
+              return readFile(file);
+            };
+            await regularFile(executable);
+
+            const output = path.resolve('build/release');
+            const stage = await mkdtemp(path.join(process.env.RUNNER_TEMP, 'uxplay-mini-package-'));
+            try {
+              await mkdir(output, { recursive: true });
+              const files = [binary, 'LICENSE', 'UPSTREAM.md', 'playfair-LICENSE.md'];
+              await copyFile(executable, path.join(stage, binary));
+              if (!target.startsWith('windows-')) await chmod(path.join(stage, binary), 0o755);
+              await writeFile(path.join(stage, 'LICENSE'), await regularFile('LICENSE'));
+              await writeFile(path.join(stage, 'playfair-LICENSE.md'),
+                await regularFile('vendor/uxplay/lib/playfair/LICENSE.md'));
+              const revision = (await exec.getExecOutput('git',
+                ['-C', process.env.VCPKG_ROOT, 'rev-parse', 'HEAD'])).stdout.trim();
+              let notices = (await regularFile('UPSTREAM.md')).toString('utf8');
+              notices += `\n## Release dependencies\n\nRuntime: ${tag} (${target}).\n`;
+              notices += `Built with [vcpkg ${revision}](https://github.com/xiaozhuai/vcpkg/tree/${revision}).\n`;
+              for (const dependency of ['openssl', 'llhttp', 'libplist', 'ffmpeg']) {
+                const copyright = path.join(process.env.VCPKG_ROOT, 'installed',
+                  process.env.RELEASE_TRIPLET, 'share', dependency, 'copyright');
+                notices += `\n### ${dependency}\n\n${(await regularFile(copyright)).toString('utf8')}\n`;
+              }
+              await writeFile(path.join(stage, 'UPSTREAM.md'), notices);
+              let total = 0;
+              for (const file of files) total += (await regularFile(path.join(stage, file))).length;
+              assert.ok(total <= 128 * 1024 * 1024, 'Runtime exceeds desktop unpacked-size limit');
+              const name = `uxplay-mini-${tag}-${target}.zip`;
+              const archive = path.join(output, name);
+              await exec.exec('cmake', ['-E', 'tar', 'cf', archive, '--format=zip', '--', ...files],
+                { cwd: stage });
+              const bytes = await regularFile(archive);
+              assert.ok(bytes.length <= 64 * 1024 * 1024, 'ZIP exceeds desktop download-size limit');
+              const digest = createHash('sha256').update(bytes).digest('hex');
+              await writeFile(`${archive}.sha256`, `${digest}  ${name}\n`);
+              core.info(`Packaged ${name} and ${name}.sha256`);
+            } finally {
+              await rm(stage, { recursive: true, force: true });
+            }
+      - name: Upload runtime artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-${{ matrix.release_target }}
+          path: build/release/*
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+          retention-days: 7
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - name: Download runtime artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: runtime-*
+          path: release-assets
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Verify assets and publish
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const assert = require('node:assert/strict');
+            const { createHash } = require('node:crypto');
+            const { lstat, readFile, readdir } = require('node:fs/promises');
+            const path = require('node:path');
+            const tag = process.env.RELEASE_TAG;
+            assert.match(tag, /^v[0-9]+\.[0-9]+\.[0-9]+$/);
+            const targets = JSON.parse(process.env.RELEASE_TARGETS);
+            const directory = path.resolve('release-assets');
+            const names = targets.flatMap(target => {
+              const name = `uxplay-mini-${tag}-${target}.zip`;
+              return [name, `${name}.sha256`];
+            }).sort();
+            assert.deepEqual((await readdir(directory)).sort(), names,
+              'All platform ZIP/checksum pairs must be present before publishing');
+            const assets = new Map();
+            for (const name of names) {
+              const file = path.join(directory, name);
+              const stat = await lstat(file);
+              assert.ok(stat.isFile() && stat.size > 0, `Invalid asset: ${name}`);
+              assert.ok(stat.size <= (name.endsWith('.sha256') ? 4096 : 64 * 1024 * 1024),
+                `Oversized asset: ${name}`);
+              assets.set(name, await readFile(file));
+            }
+            const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+            for (const target of targets) {
+              const name = `uxplay-mini-${tag}-${target}.zip`;
+              assert.equal(assets.get(`${name}.sha256`).toString('utf8'),
+                `${hash(assets.get(name))}  ${name}\n`, `Checksum mismatch: ${name}`);
+            }
+
+            const repo = context.repo;
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ ...repo, tag })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              release = (await github.rest.repos.createRelease({
+                ...repo, tag_name: tag, target_commitish: context.sha, name: tag,
+                draft: true, prerelease: false, generate_release_notes: true
+              })).data;
+            }
+            assert.ok(release.draft, 'Refusing to overwrite an already published release');
+            const release_id = release.id;
+            const existing = await github.paginate(github.rest.repos.listReleaseAssets,
+              { ...repo, release_id, per_page: 100 });
+            for (const [name, data] of assets) {
+              // A failed run may leave a draft; replace only its expected assets.
+              for (const old of existing.filter(asset => asset.name === name)) {
+                await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: old.id });
+              }
+              await github.rest.repos.uploadReleaseAsset({
+                ...repo, release_id, name, data,
+                headers: { 'content-type': name.endsWith('.sha256') ? 'text/plain' : 'application/zip' }
+              });
+            }
+            const uploaded = await github.paginate(github.rest.repos.listReleaseAssets,
+              { ...repo, release_id, per_page: 100 });
+            for (const [name, data] of assets) {
+              const matches = uploaded.filter(asset => asset.name === name);
+              assert.equal(matches.length, 1, `Missing or duplicate uploaded asset: ${name}`);
+              assert.equal(matches[0].state, 'uploaded');
+              assert.equal(matches[0].size, data.length);
+              if (matches[0].digest) assert.equal(matches[0].digest, `sha256:${hash(data)}`);
+            }
+            // Only complete releases become visible to the desktop downloader.
+            await github.rest.repos.updateRelease({ ...repo, release_id,
+              draft: false, prerelease: false, make_latest: 'legacy' });
+            core.info(`Published ${tag} with ${assets.size} verified runtime assets`);

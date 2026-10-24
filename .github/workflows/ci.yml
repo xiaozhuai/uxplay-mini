@@ -1,0 +1,114 @@
+name: ci
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.preset_prefix }}
+    runs-on: ${{matrix.runner}}
+    env:
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/vendor/vcpkg/binary-cache,readwrite
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset_prefix: x64-windows-static
+            host_triplet: x64-windows-static
+            triplet: x64-windows-static
+            runner: windows-2022
+          - preset_prefix: arm64-macos
+            triplet: arm64-osx
+            runner: macos-26
+          - preset_prefix: x64-macos
+            triplet: x64-osx
+            runner: macos-26
+          - preset_prefix: x64-linux
+            triplet: x64-linux
+            runner: ubuntu-26.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Checkout vcpkg
+        uses: actions/checkout@v7
+        with:
+          repository: xiaozhuai/vcpkg
+          ref: uxplay-mini
+          path: vendor/vcpkg
+      - name: Install System Dependencies (macOS)
+        if: ${{ startsWith(matrix.runner, 'macos-') }}
+        run: |
+          brew install nasm
+      - name: Install System Dependencies (Linux)
+        if: ${{ startsWith(matrix.runner, 'ubuntu-') }}
+        run: |
+          sudo apt-get install nasm
+      - name: Prepare vcpkg cache
+        id: vcpkg-cache-key
+        shell: bash
+        run: |
+          mkdir -p vendor/vcpkg/binary-cache vendor/vcpkg/downloads
+          printf 'revision=%s\n' "$(git -C vendor/vcpkg rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          printf 'image-version=%s\n' "${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            vendor/vcpkg/binary-cache
+            vendor/vcpkg/downloads
+          key: vcpkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.triplet }}-${{ matrix.host_triplet || 'default' }}-${{ steps.vcpkg-cache-key.outputs.image-version }}-${{ steps.vcpkg-cache-key.outputs.revision }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            vcpkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.triplet }}-${{ matrix.host_triplet || 'default' }}-${{ steps.vcpkg-cache-key.outputs.image-version }}-
+            vcpkg-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.triplet }}-${{ matrix.host_triplet || 'default' }}-
+      - name: Install dependencies
+        uses: actions/github-script@v8
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vendor/vcpkg
+          TARGET_TRIPLET: ${{ matrix.triplet }}
+          HOST_TRIPLET: ${{ matrix.host_triplet }}
+        with:
+          script: |
+            const path = require('node:path');
+            const windows = process.platform === 'win32';
+            const bootstrap = path.join(process.env.VCPKG_ROOT,
+              windows ? 'bootstrap-vcpkg.bat' : 'bootstrap-vcpkg.sh');
+            const vcpkg = path.join(process.env.VCPKG_ROOT, windows ? 'vcpkg.exe' : 'vcpkg');
+            await exec.exec(`"${bootstrap}"`);
+            const args = ['install', '--triplet', process.env.TARGET_TRIPLET,
+              '--clean-buildtrees-after-build', '--clean-packages-after-build', '--no-print-usage'];
+            if (process.env.HOST_TRIPLET) args.push('--host-triplet', process.env.HOST_TRIPLET);
+            args.push('openssl', 'llhttp', 'libplist', 'ffmpeg[core,avcodec]');
+            await exec.exec(`"${vcpkg}"`, args);
+      - name: Save vcpkg cache
+        if: steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            vendor/vcpkg/binary-cache
+            vendor/vcpkg/downloads
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+      - name: Prepare build
+        uses: TheMrMilchmann/setup-msvc-dev@v4
+        if: ${{ startsWith(matrix.runner, 'windows-') }}
+        with:
+          arch: x64
+      - name: Build
+        uses: actions/github-script@v8
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vendor/vcpkg
+          PRESET_PREFIX: ${{ matrix.preset_prefix }}
+        with:
+          script: |
+            for (const type of ['debug', 'release']) {
+              core.info(`Build ${type}`);
+              const preset = `${process.env.PRESET_PREFIX}-${type}`;
+              const directory = `build/binary/${preset}`;
+              await exec.exec('cmake', ['--preset', preset, '-B', directory, '.']);
+              await exec.exec('cmake', ['--build', directory, '--target', 'all']);
+            }
