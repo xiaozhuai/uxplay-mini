@@ -13,6 +13,8 @@ Additional upstream commits selectively backported on 2026-10-26:
   and removed reverse-HTTP parser changes are excluded. Corrected the new invalid
   key-length diagnostic and cleaned up plists on that error path; SRP temporary
   buffers are also released when verifier creation fails.
+- [`bced29377447917303df5d8002873ea483a54612`](https://github.com/FDH2/UxPlay/commit/bced29377447917303df5d8002873ea483a54612):
+  imported the nonce-generation correction and password-challenge cleanup.
 
 The base import above remains unchanged; this is not a full upstream revision update.
 
@@ -22,6 +24,8 @@ Local changes:
   password-required discovery records on both mDNS backends. Like upstream `-pw`,
   this mode clears feature bit 27 so iPhone uses SETUP Digest authentication
   instead of requesting a random SRP pairing PIN. No random-PIN CLI.
+- Hardened Digest parsing, binding credentials to the current nonce, realm and
+  request URI; unauthenticated streams-only SETUP cannot skip password validation.
 - Removed HLS HTTP handlers, playlist proxy, media store and playback callbacks.
 - Removed the unused reverse-HTTP/Event channel and associated request parser code.
 - Replaced the upstream executable and all GStreamer renderers with a small CLI,

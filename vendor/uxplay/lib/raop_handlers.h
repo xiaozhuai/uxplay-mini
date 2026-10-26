@@ -641,11 +641,27 @@ raop_handler_setup(raop_conn_t *conn,
     // Parsing bplist
     plist_t req_root_node = NULL;
     plist_from_bin(data, data_len, &req_root_node);
+    if (!PLIST_IS_DICT(req_root_node)) {
+        plist_free(req_root_node);
+        http_response_init(response, "RTSP/1.0", 400, "Bad Request");
+        return;
+    }
     plist_t req_ekey_node = plist_dict_get_item(req_root_node, "ekey");
     plist_t req_eiv_node = plist_dict_get_item(req_root_node, "eiv");
 	
     // For the response
     plist_t res_root_node = plist_new_dict();
+
+    if (!conn->authenticated && raop->callbacks.passwd) {
+        int password_length = 0;
+        raop->callbacks.passwd(raop->callbacks.cls, &password_length);
+        if (password_length && !(PLIST_IS_DATA(req_eiv_node) && PLIST_IS_DATA(req_ekey_node))) {
+            plist_free(req_root_node);
+            plist_free(res_root_node);
+            http_response_init(response, "RTSP/1.0", 401, "Unauthorized");
+            return;
+        }
+    }
 
     if (PLIST_IS_DATA(req_eiv_node) && PLIST_IS_DATA(req_ekey_node)) {
         // The first SETUP call that initializes keys and timing
@@ -708,27 +724,16 @@ raop_handler_setup(raop_conn_t *conn,
  	        if (len == -1) {
                     password = (const char *) raop->random_pw;
                 }
-                char nonce_string[33] = { '\0' };
-                //bool stale = false;  //not implemented
                 if (len && authorization) {
-                    const char *ptr = strstr(authorization, "nonce=\"") +  strlen("nonce=\"");
-                    strncpy(nonce_string, ptr, 32);
                     const char *method = http_request_get_method(request);
-                    conn->authenticated = pairing_digest_verify(method, authorization, password);
+                    conn->authenticated = pairing_digest_verify(method, http_request_get_url(request),
+                                                                  authorization, password, raop->nonce);
                     if (!conn->authenticated) {
                         // if random_pw is used, the auth_fail_count will be the number of times it is displayed after creation
                         if (len != -1) {
                             raop->auth_fail_count++;
                         }
                         logger_log(raop->logger, LOGGER_INFO, "*** authentication failure: count = %u", raop->auth_fail_count);
-                    }
-                    if (conn->authenticated) {
-                        //printf("initial authenticatication OK\n");
-                        conn->authenticated = conn->authenticated && !strcmp(nonce_string, raop->nonce);
-                        if (!conn->authenticated) {
-                            logger_log(raop->logger, LOGGER_INFO, "authentication rejected (nonce mismatch) %s %s",
-                                       nonce_string, raop->nonce);
-                        }			
                     }
                     if (conn->authenticated && raop->random_pw) {
                         free (raop->random_pw);
@@ -756,6 +761,15 @@ raop_handler_setup(raop_conn_t *conn,
                     strncat(response_text, "\"", 80 - strlen(response_text) - 1);
                     http_response_init(response, "RTSP/1.0", 401, "Unauthorized");
                     http_response_add_header(response, "WWW-Authenticate", response_text);
+                    if (req_root_node) {
+                        plist_free(req_root_node);
+                    }
+                    if (res_root_node) {
+                        plist_free(res_root_node);
+                    }
+                    if (deviceID) {
+                        plist_mem_free(deviceID);
+                    }
                     return;
                 }
             }

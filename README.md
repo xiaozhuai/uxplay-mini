@@ -171,6 +171,10 @@ L16 byte order, audio without NTP, clock jitter, audio sample-timestamp wraparou
 AAC-ELD/AAC-LC initialization, actual ALAC decoding, UDP transmission and reception,
 incremental RTSP parsing, binary property lists, the pairing setup endpoint,
 HLS rejection, default and opt-in H.265 capability bits and SDP, and process exit.
+Password tests cover Digest challenges, correct and incorrect passwords, malformed
+and reordered authorization fields, stale nonces, qop, unauthenticated stream setup,
+and invalid PIN-pairing and SETUP key lengths. DNS-SD tests also verify the password
+advertisement. These protocol tests do not complete a real iPhone pairing session.
 Explicit `--no-audio` tests check that AirPlay audio capabilities remain available
 in `/info` and DNS-SD TXT records while outgoing audio is omitted from SDP and logs.
 On macOS, an independent system `dns-sd` client also checks AirPlay service ports,

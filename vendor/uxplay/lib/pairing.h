@@ -63,6 +63,7 @@ int srp_confirm_pair_setup(pairing_session_t *session, pairing_t *pairing, unsig
 void get_pairing_session_client_data(pairing_session_t *session, char **username, char **client_pk);
 void ed25519_pk_to_base64(const unsigned char *pk, char **pk64);
 int pairing_session_make_nonce(pairing_session_t *session, uint64_t *local_time, const char *client_data, unsigned char *nonce, int len);
-bool pairing_digest_verify(const char *method, const char * authorization, const char *password);
+bool pairing_digest_verify(const char *method, const char *request_uri, const char *authorization,
+                           const char *password, const char *expected_nonce);
 
 #endif

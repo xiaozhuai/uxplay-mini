@@ -142,6 +142,9 @@ L16 字节序、音频无 NTP/时钟抖动/采样时间戳回绕、AAC-ELD/AAC-L
 二进制 plist、配对 setup 接口、HLS 拒绝、默认/显式启用 H.265 的能力位与 SDP，
 以及进程退出。macOS 还通过系统独立的 `dns-sd` 客户端检查 AirPlay 服务的端口、
 TXT 广播记录及 HEVC 能力位。
+密码测试覆盖 Digest 挑战、正确与错误密码、畸形及乱序认证字段、旧 nonce、qop、
+未认证的流 SETUP，以及 PIN 配对和 SETUP 密钥的异常长度；DNS-SD 测试也会检查密码广播。
+这些协议测试不执行真实 iPhone 的完整配对。
 另有显式 `--no-audio` 回归测试，检查 `/info` 和 DNS-SD TXT 中保留音频能力，
 但 SDP 与日志不再宣告下游音频输出。
 

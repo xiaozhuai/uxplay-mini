@@ -20,6 +20,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdbool.h>
+#include <openssl/crypto.h>
 #include <openssl/sha.h> // for SHA512_DIGEST_LENGTH
 
 #include "pairing.h"
@@ -198,192 +199,123 @@ pairing_session_get_public_key(pairing_session_t *session, unsigned char ecdh_ke
 int
 pairing_session_make_nonce(pairing_session_t *session, uint64_t *local_time, const char *client_data, unsigned char *nonce, int len)  {
     unsigned char hash[SHA512_DIGEST_LENGTH];
+    unsigned char ed_ours[ED25519_KEY_SIZE];
     if (len > (int) sizeof(hash)) {
       return -1;
     }
     if (!client_data || !local_time || !session || !nonce || len <= 0) {
       return -2;
     }
+    ed25519_key_get_raw(ed_ours, session->ed_ours);
     sha_ctx_t *ctx = sha_init();
     sha_update(ctx, (const unsigned char *) local_time, sizeof(uint64_t));
     sha_update(ctx, (const unsigned char *) client_data, strlen(client_data));
-    sha_update(ctx, (const unsigned char *) session->ed_ours, ED25519_KEY_SIZE);
+    sha_update(ctx, (const unsigned char *) ed_ours, ED25519_KEY_SIZE);
     sha_final(ctx, hash, NULL);
     sha_destroy(ctx);
     memcpy(nonce, hash, len);
     return 0;
 }  
 
-static
-char *get_token(char **cursor, char *token_name, char start_char, char end_char) {
-    char *ptr = *cursor;
-
-    ptr = strstr(ptr, token_name);
-    if (!ptr) {
-        return NULL;
+/* Parse Digest fields independently of their order. Values refer to the mutable
+ * header copy and must not outlive it. Reject malformed or duplicate fields. */
+static bool digest_fields(char *header, char **values) {
+    static const char *names[] = {
+        "username", "realm", "nonce", "uri", "response", "qop", "nc", "cnonce", "algorithm"
+    };
+    if (strncmp(header, "Digest ", 7)) return false;
+    char *cursor = header + 7;
+    while (*cursor) {
+        cursor += strspn(cursor, " \t");
+        char *name = cursor;
+        cursor += strspn(cursor, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-");
+        char *name_end = cursor;
+        if (name_end == name) return false;
+        cursor += strspn(cursor, " \t");
+        if (*cursor++ != '=') return false;
+        *name_end = '\0';
+        cursor += strspn(cursor, " \t");
+        char *value;
+        if (*cursor == '"') {
+            value = ++cursor;
+            while (*cursor && *cursor != '"') {
+                if (*cursor == '\\') return false;
+                cursor++;
+            }
+            if (!*cursor) return false;
+            *cursor++ = '\0';
+            cursor += strspn(cursor, " \t");
+            if (*cursor && *cursor != ',') return false;
+            if (*cursor) cursor++;
+        } else {
+            value = cursor;
+            char *end = strchr(cursor, ',');
+            if (!end) end = cursor + strlen(cursor);
+            cursor = *end ? end + 1 : end;
+            while (end > value && (end[-1] == ' ' || end[-1] == '\t')) end--;
+            *end = '\0';
+        }
+        for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+            if (!strcmp(name, names[i])) {
+                if (values[i]) return false;
+                values[i] = value;
+                break;
+            }
+        }
     }
-    ptr += strlen(token_name);
-    ptr = strchr(ptr, start_char);
-    if (!ptr) {
-        return NULL;
-    }
-       
-    char *token = ++ptr;
-    ptr = strchr(ptr, end_char);
-    if (!ptr) {
-        return NULL;
-    }
-    
-    *(ptr++) = '\0';
-    *cursor = ptr;
-    return token; 
+    return true;
 }
 
-//#define test_digest
 bool
-pairing_digest_verify(const char *method, const char * authorization, const char *password) {
-  /* RFC 2617 HTTP md5 Digest password authentication */
-    size_t authlen = strlen(authorization);
-    char *sentence = (char *) malloc(authlen + 1);
-    if (!sentence) {
-        printf("Memory allocation failure (sentence)\n");
-        exit(1);
-    }
-    memcpy(sentence, authorization, authlen);
-    *(sentence + authlen) = '\0';
-    char *username = NULL;
-    char *realm = NULL;
-    char *nonce = NULL;
-    char *uri = NULL;
-    char *qop = NULL;
-    char *nc = NULL;
-    char *cnonce = NULL;
-    char *response = NULL;
-    
-    char *cursor = sentence;
-    const char *pwd = password;
-    const char *mthd = method;
-    int len = 0;
-    char *raw = NULL;
-    bool authenticated;
+pairing_digest_verify(const char *method, const char *request_uri, const char *authorization,
+                      const char *password, const char *expected_nonce) {
+    if (!method || !request_uri || !authorization || !password || !expected_nonce) return false;
+    char *sentence = malloc(strlen(authorization) + 1);
+    if (!sentence) return false;
+    strcpy(sentence, authorization);
+    char *values[9] = {0};
+    char *raw = NULL, *hash1 = NULL, *hash2 = NULL, *result = NULL;
+    bool authenticated = false;
+    if (!digest_fields(sentence, values)) goto cleanup;
+    const char *username = values[0], *realm = values[1], *nonce = values[2];
+    const char *uri = values[3], *response = values[4], *qop = values[5];
+    const char *nc = values[6], *cnonce = values[7], *algorithm = values[8];
+    if (!username || !realm || !nonce || !uri || !response ||
+        strcmp(realm, "raop") || strcmp(uri, request_uri) || strcmp(nonce, expected_nonce) ||
+        strlen(response) != 32 || strspn(response, "0123456789abcdefABCDEF") != 32 ||
+        (algorithm && strcmp(algorithm, "MD5"))) goto cleanup;
+    if (qop && (strcmp(qop, "auth") || !nc || !cnonce || !*cnonce ||
+                strlen(nc) != 8 || strspn(nc, "0123456789abcdefABCDEF") != 8)) goto cleanup;
 
-#ifdef test_digest
-    char testauth[] = "Digest username=\"Mufasa\","
-                 "realm=\"testrealm@host.com\","
-                 "nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\","
-                 "uri=\"/dir/index.html\","
-                 "qop=auth,"
-                 "nc=00000001,"
-                 "cnonce=\"0a4f113b\","
-                 "response=\"6629fae49393a05397450978507c4ef1\","
-                 "opaque=\"5ccc069c403ebaf9f0171e9517f40e41\""
-    ;
-    pwd = "Circle Of Life";
-    mthd = "GET";
-    cursor = testauth;
-    
-    char HA1[] = "939e7578ed9e3c518a452acee763bce9";
-    char HA2[] = "39aff3a2bab6126f332b942af96d3366";
-#endif
-    username = get_token(&cursor, "username", '\"', '\"');
-    realm = get_token(&cursor, "realm", '\"', '\"');
-    nonce = get_token(&cursor,"nonce", '\"', '\"');
-    uri = get_token(&cursor,"uri", '\"', '\"');
-    qop = get_token(&cursor, "qop", '=', ',');
-    if (qop) {
-        nc = get_token(&cursor, "nc", '=', ',');
-        cnonce = get_token(&cursor, "cnonce", '\"', '\"');
+    size_t length = strlen(username) + strlen(realm) + strlen(password) + 3;
+    raw = malloc(length);
+    if (!raw) goto cleanup;
+    snprintf(raw, length, "%s:%s:%s", username, realm, password);
+    hash1 = get_md5(raw);
+    free(raw);
+    length = strlen(method) + strlen(uri) + 2;
+    raw = malloc(length);
+    if (!raw) goto cleanup;
+    snprintf(raw, length, "%s:%s", method, uri);
+    hash2 = get_md5(raw);
+    free(raw);
+    length = strlen(hash1) + strlen(nonce) + strlen(hash2) + 3;
+    if (qop) length += strlen(nc) + strlen(cnonce) + strlen(qop) + 3;
+    raw = malloc(length);
+    if (!raw) goto cleanup;
+    if (qop) snprintf(raw, length, "%s:%s:%s:%s:%s:%s", hash1, nonce, nc, cnonce, qop, hash2);
+    else snprintf(raw, length, "%s:%s:%s", hash1, nonce, hash2);
+    result = get_md5(raw);
+    for (size_t i = 0; i < 32; i++) {
+        if (response[i] >= 'A' && response[i] <= 'F') values[4][i] += 'a' - 'A';
     }
-    response = get_token(&cursor, "response", '\"', '\"');
-
-#ifdef test_digest
-    printf("username: [%s]  realm: [%s]\n", username, realm);
-    printf("nonce: [%s]\n", nonce);
-    printf("method: [%s]\n", mthd);
-    printf("uri: [%s]\n", uri);
-    if (qop) {
-        printf("qop: [%s], nc=[%s], cnonce: [%s]\n", qop, nc, cnonce);
-    }
-    printf("response: [%s]\n", response);
-
-#endif
-    
-    /* H1 = H(username : realm : password ) */
-    len = strlen(username) + strlen(realm) + strlen(pwd) + 3;
-    raw = (char *) calloc(len, sizeof(char));
-    if (!raw) {
-        printf("Memory allocation failure (raw)\n");
-        exit(1);
-    }
-    strcat(raw, username);
-    strcat(raw, ":");
-    strcat(raw, realm);
-    strcat(raw, ":");
-    strcat(raw, pwd);   
-    char *hash1 = get_md5(raw);
-    free (raw);    
-    
-#ifdef test_digest
-    printf("hash1: should be %s, was: %s\n", HA1, hash1);
-#endif
-    
-    /* H2 = H(method : uri) */
-    len = strlen(mthd) + strlen(uri) + 2;
-    raw  = (char *) calloc(len, sizeof(char));
-    if (!raw) {
-        printf("Memory allocation failure (raw)\n");
-        exit(1);
-    }
-    strcat(raw, mthd);
-    strcat(raw, ":");
-    strcat(raw, uri);
-    char *hash2 = get_md5(raw);
-    free (raw);
-
-#ifdef test_digest
-    printf("hash2: should be %s, was:  %s\n", HA2, hash2);
-#endif
-
-    /* result = H(H1 : nonce (or nonce:nc:cnonce:qop) : H2) */    
-    len = strlen(hash1) +  strlen(nonce) + strlen(hash2) + 3;
-    if (qop) {
-        len += strlen(nc) + strlen(cnonce) + strlen(qop) + 3;
-    }
-    raw = (char *) calloc(len, sizeof(char));
-    if (!raw) {
-        printf("Memory allocation failure (raw)\n");
-        exit(1);
-    }
-    strncat(raw, hash1, len - strlen(raw) - 1);
-    strncat(raw, ":", len - strlen(raw) - 1);
-    strncat(raw, nonce, len - strlen(raw) - 1);
-    strncat(raw, ":", len - strlen(raw) - 1);      
-    if (qop) {
-        strncat(raw, nc, len - strlen(raw) - 1);
-        strncat(raw, ":", len - strlen(raw) - 1);  
-        strncat(raw, cnonce, len - strlen(raw) - 1);
-        strncat(raw, ":", len - strlen(raw) - 1);  
-        strncat(raw, qop, len - strlen(raw) - 1);
-        strncat(raw, ":", len - strlen(raw) - 1);  
-    }
-    strncat(raw, hash2, len - strlen(raw) - 1);
-    free (hash1);
-    free (hash2);
-    char *result = get_md5(raw);
-    free (raw);
-    authenticated = (strcmp(result,response) ? false : true);
-
-#ifdef test_digest
-    printf("result: should be %s, was:  %s, authenticated is %s\n", response, result, (authenticated ? "true" : "false"));
-#endif
-
-    free (result);
+    authenticated = CRYPTO_memcmp(result, response, 32) == 0;
+cleanup:
+    free(raw);
+    free(hash1);
+    free(hash2);
+    free(result);
     free(sentence);
-
-#ifdef test_digest
-    exit(0);
-#endif
-
     return authenticated;
 }
 
