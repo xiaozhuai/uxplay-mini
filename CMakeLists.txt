@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # Never let a preset or an IDE install dependencies implicitly.
 set(VCPKG_MANIFEST_INSTALL OFF CACHE BOOL "Dependency installation requires explicit approval")
-project(uxplay_mini VERSION 0.1.1 LANGUAGES C CXX)
+project(uxplay_mini VERSION 0.1.2 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
