@@ -680,15 +680,20 @@ raop_handler_setup(raop_conn_t *conn,
             size_t pin_len = 4;
             const char *authorization = NULL;
             authorization = http_request_get_header(request, "Authorization");
-            if (!authorization) {
-                // if random_pw is set, but client has changed, unset it 
-                if (raop->random_pw && strncmp(raop->random_pw + pin_len + 1,  deviceID, 17)) {
-                    free(raop->random_pw);
-                    raop->random_pw = NULL;
-                }
-            }
             int len = 0;
             const char *password = raop->callbacks.passwd(raop->callbacks.cls, &len);
+            if (len == -1 && (!deviceID || !*deviceID)) {
+                plist_mem_free(deviceID);
+                plist_free(req_root_node);
+                plist_free(res_root_node);
+                http_response_init(response, "RTSP/1.0", 400, "Bad Request");
+                return;
+            }
+            if (len == -1 && raop->random_pw &&
+                strncmp(raop->random_pw + pin_len + 1, deviceID, 17)) {
+                free(raop->random_pw);
+                raop->random_pw = NULL;
+            }
             // len = -1 means use a random password for this connection; len = 0 means no password
             if (len == -1 && raop->random_pw && raop->auth_fail_count >= MAX_PW_ATTEMPTS) {
                 // change random_pw after MAX_PW_ATTEMPTS  failed authentication attempts
@@ -701,7 +706,11 @@ raop_handler_setup(raop_conn_t *conn,
                 int pin_4  = random_pin();
                 if (pin_4 < 0) {
                     logger_log(raop->logger, LOGGER_ERR, "Failed to generate random pin");
-                    pin_4 = 1234;
+                    plist_mem_free(deviceID);
+                    plist_free(req_root_node);
+                    plist_free(res_root_node);
+                    http_response_init(response, "RTSP/1.0", 500, "Internal Server Error");
+                    return;
                 }
                 if ((raop->random_pw =  (char *) calloc(pin_len + 1 + 18, sizeof(char)))) {
                     char *pin = raop->random_pw;
@@ -710,15 +719,19 @@ raop_handler_setup(raop_conn_t *conn,
                     snprintf(pin + pin_len + 1, 18, "%s", deviceID);
                 } else {
                     logger_log(raop->logger, LOGGER_ERR, "Failed to allocate raop->random_pw");
+                    plist_mem_free(deviceID);
+                    plist_free(req_root_node);
+                    plist_free(res_root_node);
+                    http_response_init(response, "RTSP/1.0", 500, "Internal Server Error");
+                    return;
                 }
                 raop->auth_fail_count = 0;
-            }
-            if (len == -1 && !authorization && raop->random_pw) {
+                // Display each newly generated code, including retry-limit and
+                // client changes, even when the request carries Authorization.
                 if (raop->callbacks.display_pin) {
                     raop->callbacks.display_pin(raop->callbacks.cls, raop->random_pw);
                 }
                 logger_log(raop->logger, LOGGER_INFO, "*** CLIENT MUST NOW ENTER PIN = \"%s\" AS AIRPLAY PASSWORD", raop->random_pw);
-                raop->auth_fail_count++;
             }
             if (len && !conn->authenticated) {
  	        if (len == -1) {
@@ -729,10 +742,7 @@ raop_handler_setup(raop_conn_t *conn,
                     conn->authenticated = pairing_digest_verify(method, http_request_get_url(request),
                                                                   authorization, password, raop->nonce);
                     if (!conn->authenticated) {
-                        // if random_pw is used, the auth_fail_count will be the number of times it is displayed after creation
-                        if (len != -1) {
-                            raop->auth_fail_count++;
-                        }
+                        raop->auth_fail_count++;
                         logger_log(raop->logger, LOGGER_INFO, "*** authentication failure: count = %u", raop->auth_fail_count);
                     }
                     if (conn->authenticated && raop->random_pw) {

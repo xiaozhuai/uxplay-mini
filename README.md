@@ -103,15 +103,38 @@ Add `--password` to require a password when an iPhone connects:
 ```
 
 Enter the same password on the iPhone when prompted. It remains unchanged across
-connections and process restarts when the same argument is supplied. Omit the
-option to disable password authentication. Passwords must contain 1–64 bytes and
-no control characters; an empty password is rejected. No random-PIN mode is exposed.
+connections and process restarts when the same argument is supplied. Omit both
+password options to disable authentication. Passwords must contain 1–64 bytes and
+no control characters; an empty password is rejected.
 The password is not printed in mini's logs, but command-line arguments can be
 visible in operating-system process listings.
 
 This authenticates incoming AirPlay sessions. Outgoing RTP/RTCP and audio/video
 formats are unchanged. The desktop app must explicitly pass this argument to use
 password authentication; its current launcher does not do so.
+
+### Random AirPlay password
+
+Use `--random-password` to generate a temporary four-digit password when a client
+starts authentication:
+
+```sh
+./build/binary/arm64-macos-release/uxplay-mini --name "Private receiver" --random-password
+```
+
+Select the receiver on iPhone, then enter the code printed in the terminal as
+`AirPlay PIN: 0123`. Keep any leading zeroes. The code remains valid during the
+same authentication attempt, including repeated challenges. After successful
+authentication, a later session generates a new code. Switching clients or
+reaching three failed authentication attempts also causes a new code to be
+generated and displayed on the next attempt. A newly generated code can happen
+to have the same digits as an earlier one.
+
+`--password` and `--random-password` are mutually exclusive. Omit both to disable
+password authentication. Both modes use SETUP Digest authentication with PIN/SRP
+pairing advertisement disabled. Random passwords are displayed in logs so the
+user can enter them; fixed passwords are not. The desktop launcher does not yet
+enable random passwords or display their codes.
 
 All multi-character options use two hyphens, with values separated by spaces.
 The only single-letter aliases are `-h` (help), `-n` (name), and `-d` (debug).
@@ -175,6 +198,8 @@ Password tests cover Digest challenges, correct and incorrect passwords, malform
 and reordered authorization fields, stale nonces, qop, unauthenticated stream setup,
 and invalid PIN-pairing and SETUP key lengths. DNS-SD tests also verify the password
 advertisement. These protocol tests do not complete a real iPhone pairing session.
+Random-password tests also cover code generation and display, stable challenges,
+wrong and correct codes, renewal after success, retry-limit rotation and client changes.
 Explicit `--no-audio` tests check that AirPlay audio capabilities remain available
 in `/info` and DNS-SD TXT records while outgoing audio is omitted from SDP and logs.
 On macOS, an independent system `dns-sd` client also checks AirPlay service ports,

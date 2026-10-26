@@ -40,6 +40,9 @@ struct Options {
     std::array<unsigned char, 6> device{0x02, 0x55, 0x58, 0x50, 0x4c, 0x59};
     unsigned video_port = 5000, audio_port = 5002, port = 0, fps = 60, mtu = 1200, seconds = 0;
     bool audio = true, mdns = true, nohold = true, debug = false, h265 = false, show_help = false;
+    bool random_password = false;
+
+    unsigned char password_mode() const { return random_password ? 3 : password.empty() ? 0 : 2; }
 };
 unsigned number(const std::string& value, unsigned min, unsigned max) {
     unsigned result = 0;
@@ -61,6 +64,7 @@ void help() {
         "  --device-id XX:XX:XX:XX:XX:XX  unique, stable receiver identity\n"
         "  --keyfile PATH         persistent pairing key (optional)\n"
         "  --password PASSWORD    fixed AirPlay access password (disabled by default)\n"
+        "  --random-password      generate and display a temporary 4-digit password\n"
         "  --sdp PATH             write receiver SDP for the outgoing streams\n"
         "  --no-audio             disable audio decoding and RTP output\n"
         "  --no-mdns              do not advertise services (diagnostic use)\n"
@@ -98,6 +102,7 @@ Options parse(int argc, char** argv) {
                 std::any_of(o.password.begin(), o.password.end(), [](unsigned char c) { return c < 0x20 || c == 0x7f; }))
                 throw std::invalid_argument("password must contain 1..64 bytes without control characters");
         }
+        else if (arg == "--random-password") o.random_password = true;
         else if (arg == "--sdp") o.sdp = value();
         else if (arg == "--no-audio") o.audio = false;
         else if (arg == "--no-mdns") o.mdns = false;
@@ -115,6 +120,8 @@ Options parse(int argc, char** argv) {
             }
         } else throw std::invalid_argument("unknown option: " + arg);
     }
+    if (o.random_password && !o.password.empty())
+        throw std::invalid_argument("--password and --random-password are mutually exclusive");
     if (o.name.empty() || o.name.size() > 63 || o.name.find_first_of("\r\n") != std::string::npos)
         throw std::invalid_argument("receiver name must contain 1..63 bytes without line breaks");
     if (o.audio && (o.video_port <= o.audio_port + 1 && o.audio_port <= o.video_port + 1))
@@ -167,15 +174,15 @@ struct Receiver {
         }
         int error = 0;
         dns.reset(dnssd_init(options.name.c_str(), int(options.name.size()),
-                            reinterpret_cast<const char*>(options.device.data()), 6, options.password.empty() ? 0 : 2, &error));
+                            reinterpret_cast<const char*>(options.device.data()), 6, options.password_mode(), &error));
         if (!dns) throw std::runtime_error("could not initialize service discovery: " + std::to_string(error));
         // Match upstream's mirror/audio feature set, without HLS or legacy video playback.
         dnssd_set_airplay_features(dns.get(), 0, 0);
         dnssd_set_airplay_features(dns.get(), 4, 0);
         dnssd_set_airplay_features(dns.get(), 42, int(options.h265)); // SupportsScreenMultiCodec
-        // Match upstream -pw: fixed passwords use SETUP Digest authentication.
+        // Match upstream -pw: fixed and random passwords use SETUP Digest authentication.
         // Advertising bit 27 makes iPhone request a separate random PIN via SRP.
-        if (!options.password.empty()) dnssd_set_airplay_features(dns.get(), 27, 0);
+        if (options.password_mode()) dnssd_set_airplay_features(dns.get(), 27, 0);
         // iPhone needs the normal audio capabilities to complete mirror setup,
         // even for video-only output. Removing them leaves it connecting until
         // it tears down the session after about a minute. --no-audio (including
@@ -189,11 +196,11 @@ struct Receiver {
     void start_server() {
         raop_callbacks_t cb{};
         cb.cls = this;
-        if (!options.password.empty()) {
-            cb.passwd = [](void* cls, int* len) {
-                const auto& password = static_cast<Receiver*>(cls)->options.password;
-                *len = int(password.size());
-                return password.c_str();
+        if (options.password_mode()) {
+            cb.passwd = [](void* cls, int* len) -> const char* {
+                const auto& options = static_cast<Receiver*>(cls)->options;
+                *len = options.random_password ? -1 : int(options.password.size());
+                return options.random_password ? nullptr : options.password.c_str();
             };
         }
         cb.audio_process = [](void* cls, raop_ntp_t*, audio_decode_struct* data) {

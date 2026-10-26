@@ -13,7 +13,7 @@ value_options = {
     "--name", "--host", "--video-port", "--audio-port", "--port", "--fps",
     "--mtu", "--device-id", "--keyfile", "--sdp", "--run-seconds", "--password", "-n",
 }
-flag_options = {"--h265", "--no-audio", "--no-mdns", "--hold", "--debug", "--help", "-d", "-h"}
+flag_options = {"--h265", "--no-audio", "--no-mdns", "--hold", "--debug", "--help", "--random-password", "-d", "-h"}
 
 
 def invoke(args):
@@ -56,6 +56,9 @@ for device_id in ["", "02:55:58:50:4c", "02:55:58:50:4c:gg", "02-55-58-50-4c-59"
     reject(["--device-id", device_id], "invalid device ID")
 for password in ["", "x" * 65, "bad\npassword", "bad\rpassword", "bad\tpassword", "bad\x7fpassword"]:
     reject(["--password", password], "password must contain 1..64 bytes without control characters")
+for args in [["--password", "fixed", "--random-password"], ["--random-password", "--password", "fixed"]]:
+    reject(args, "--password and --random-password are mutually exclusive")
+reject(["--random-password", "1234"], "unknown option: 1234")
 if audio_enabled:
     for port in ["4999", "5000", "5001"]:
         reject(["--audio-port", port], "audio and video RTP/RTCP port pairs overlap")
@@ -76,6 +79,7 @@ with tempfile.TemporaryDirectory(prefix="uxplay-mini-cli-") as folder:
         ["--password", "a"],
         ["--password", "x" * 64],
         ["--password", "spaces and punctuation: !\"\\"],
+        ["--random-password"],
     ]
     for option, values in {
         "--video-port": ["1", "65534"], "--audio-port": ["1", "65534"],

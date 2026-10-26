@@ -9,15 +9,16 @@ import threading
 
 
 options = sys.argv[3:]
-assert set(options) <= {"--h265", "--no-audio", "--password"}, options
+assert set(options) <= {"--h265", "--no-audio", "--password", "--random-password"}, options
 h265_enabled = "--h265" in options
 no_audio = "--no-audio" in options
-password_enabled = "--password" in options
-name = "UxPlay Mini discovery" + (" H265" if h265_enabled else "") + (" no-audio" if no_audio else "") + (" password" if password_enabled else "") + " test"
+random_password = "--random-password" in options
+password_enabled = "--password" in options or random_password
+name = "UxPlay Mini discovery" + (" H265" if h265_enabled else "") + (" no-audio" if no_audio else "") + (" random" if random_password else " password" if password_enabled else "") + " test"
 ready = queue.Queue()
 logs = []
 args = [sys.argv[1], *(option for option in options if option != "--password"), "--name", name, "--run-seconds", "12"]
-if password_enabled:
+if "--password" in options:
     args += ["--password", "discovery-test-password"]
 server = subprocess.Popen(
     args,

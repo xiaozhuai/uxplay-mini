@@ -20,10 +20,14 @@ The base import above remains unchanged; this is not a full upstream revision up
 
 Local changes:
 
-- Added opt-in fixed AirPlay access passwords through `--password`, including
-  password-required discovery records on both mDNS backends. Like upstream `-pw`,
-  this mode clears feature bit 27 so iPhone uses SETUP Digest authentication
-  instead of requesting a random SRP pairing PIN. No random-PIN CLI.
+- Added mutually exclusive fixed (`--password`) and generated (`--random-password`)
+  AirPlay passwords, including password-required records on both mDNS backends.
+  Like upstream `-pw`, both modes clear feature bit 27 so iPhone uses SETUP Digest
+  authentication instead of requesting a random SRP pairing PIN.
+- Random passwords use the retained upstream generator and PIN display callback.
+  Failed authentication proofs, rather than code displays, consume retry attempts;
+  regenerated codes are always displayed. Missing client identities and random
+  generation/allocation failures reject the request instead of using a fallback code.
 - Hardened Digest parsing, binding credentials to the current nonce, realm and
   request URI; unauthenticated streams-only SETUP cannot skip password validation.
 - Removed HLS HTTP handlers, playlist proxy, media store and playback callbacks.
