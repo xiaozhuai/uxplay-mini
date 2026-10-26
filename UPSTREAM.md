@@ -6,6 +6,16 @@ Only `lib/` protocol sources and the bundled PlayFair
 implementation are retained. Copyright and individual license notices are preserved.
 The combined project is distributed under GPL-3.0-or-later (see LICENSE).
 
+Additional upstream commits selectively backported on 2026-10-26:
+
+- [`60e643008adb7bdd8eb324ada63dc766af041841`](https://github.com/FDH2/UxPlay/commit/60e643008adb7bdd8eb324ada63dc766af041841):
+  imported the crypto, SRP, pairing and SETUP fixes from `lib/`. The upstream UI
+  and removed reverse-HTTP parser changes are excluded. Corrected the new invalid
+  key-length diagnostic and cleaned up plists on that error path; SRP temporary
+  buffers are also released when verifier creation fails.
+
+The base import above remains unchanged; this is not a full upstream revision update.
+
 Local changes:
 
 - Added opt-in fixed AirPlay access passwords through `--password`, including
