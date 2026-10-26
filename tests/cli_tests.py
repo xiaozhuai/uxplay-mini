@@ -11,7 +11,7 @@ binary = str(pathlib.Path(sys.argv[1]).resolve())
 audio_enabled = len(sys.argv) < 3 or sys.argv[2] == "1"
 value_options = {
     "--name", "--host", "--video-port", "--audio-port", "--port", "--fps",
-    "--mtu", "--device-id", "--keyfile", "--sdp", "--run-seconds", "-n",
+    "--mtu", "--device-id", "--keyfile", "--sdp", "--run-seconds", "--password", "-n",
 }
 flag_options = {"--h265", "--no-audio", "--no-mdns", "--hold", "--debug", "--help", "-d", "-h"}
 
@@ -54,6 +54,8 @@ for name in ["", "x" * 64, "bad\nname", "bad\rname", "界" * 22]:
     reject(["--name", name], "receiver name must contain 1..63 bytes")
 for device_id in ["", "02:55:58:50:4c", "02:55:58:50:4c:gg", "02-55-58-50-4c-59"]:
     reject(["--device-id", device_id], "invalid device ID")
+for password in ["", "x" * 65, "bad\npassword", "bad\rpassword", "bad\tpassword", "bad\x7fpassword"]:
+    reject(["--password", password], "password must contain 1..64 bytes without control characters")
 if audio_enabled:
     for port in ["4999", "5000", "5001"]:
         reject(["--audio-port", port], "audio and video RTP/RTCP port pairs overlap")
@@ -71,6 +73,9 @@ with tempfile.TemporaryDirectory(prefix="uxplay-mini-cli-") as folder:
         ["--name", "--help"],
         ["--no-audio", "--audio-port", "5000"],
         ["--name", "界" * 21],
+        ["--password", "a"],
+        ["--password", "x" * 64],
+        ["--password", "spaces and punctuation: !\"\\"],
     ]
     for option, values in {
         "--video-port": ["1", "65534"], "--audio-port": ["1", "65534"],

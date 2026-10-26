@@ -94,6 +94,25 @@ destination over UDP. Exit with Ctrl-C or SIGTERM. The receiving application
 should listen on the configured ports before streaming starts. Run `--help` for
 all options.
 
+### Fixed AirPlay password
+
+Add `--password` to require a password when an iPhone connects:
+
+```sh
+./build/binary/arm64-macos-release/uxplay-mini --name "Private receiver" --password "example-pass"
+```
+
+Enter the same password on the iPhone when prompted. It remains unchanged across
+connections and process restarts when the same argument is supplied. Omit the
+option to disable password authentication. Passwords must contain 1–64 bytes and
+no control characters; an empty password is rejected. No random-PIN mode is exposed.
+The password is not printed in mini's logs, but command-line arguments can be
+visible in operating-system process listings.
+
+This authenticates incoming AirPlay sessions. Outgoing RTP/RTCP and audio/video
+formats are unchanged. The desktop app must explicitly pass this argument to use
+password authentication; its current launcher does not do so.
+
 All multi-character options use two hyphens, with values separated by spaces.
 The only single-letter aliases are `-h` (help), `-n` (name), and `-d` (debug).
 Legacy UxPlay command-line aliases are not supported. Unknown options, missing

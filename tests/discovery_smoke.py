@@ -9,13 +9,16 @@ import threading
 
 
 options = sys.argv[3:]
-assert set(options) <= {"--h265", "--no-audio"}, options
+assert set(options) <= {"--h265", "--no-audio", "--password"}, options
 h265_enabled = "--h265" in options
 no_audio = "--no-audio" in options
-name = "UxPlay Mini discovery" + (" H265" if h265_enabled else "") + (" no-audio" if no_audio else "") + " test"
+password_enabled = "--password" in options
+name = "UxPlay Mini discovery" + (" H265" if h265_enabled else "") + (" no-audio" if no_audio else "") + (" password" if password_enabled else "") + " test"
 ready = queue.Queue()
 logs = []
-args = [sys.argv[1], *options, "--name", name, "--run-seconds", "12"]
+args = [sys.argv[1], *(option for option in options if option != "--password"), "--name", name, "--run-seconds", "12"]
+if password_enabled:
+    args += ["--password", "discovery-test-password"]
 server = subprocess.Popen(
     args,
     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
@@ -47,10 +50,12 @@ try:
         client.send_signal(signal.SIGINT)
         output, _ = client.communicate(timeout=2)
     assert f":{port}" in output and "deviceid=" in output and "features=" in output, output
+    assert f"pw={'true' if password_enabled else 'false'}" in output, output
     match = re.search(r"features=(0x[0-9a-fA-F]+),(0x[0-9a-fA-F]+)", output)
     assert match, output
     features = int(match[1], 16) | (int(match[2], 16) << 32)
     assert bool(features & (1 << 42)) == h265_enabled, output
+    assert bool(features & (1 << 27)) == (not password_enabled), output
     # DNS-SD and /info must both retain audio negotiation capabilities when
     # audio output is disabled, regardless of FFmpeg being linked or not.
     for bit in (9, 18, 19, 20, 21):

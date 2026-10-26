@@ -8,6 +8,10 @@ The combined project is distributed under GPL-3.0-or-later (see LICENSE).
 
 Local changes:
 
+- Added opt-in fixed AirPlay access passwords through `--password`, including
+  password-required discovery records on both mDNS backends. Like upstream `-pw`,
+  this mode clears feature bit 27 so iPhone uses SETUP Digest authentication
+  instead of requesting a random SRP pairing PIN. No random-PIN CLI.
 - Removed HLS HTTP handlers, playlist proxy, media store and playback callbacks.
 - Removed the unused reverse-HTTP/Event channel and associated request parser code.
 - Replaced the upstream executable and all GStreamer renderers with a small CLI,

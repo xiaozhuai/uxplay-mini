@@ -36,7 +36,7 @@ void log(const std::string& message) {
     std::cerr << message << std::endl;
 }
 struct Options {
-    std::string name = "UxPlay Mini", host = "127.0.0.1", keyfile, sdp;
+    std::string name = "UxPlay Mini", host = "127.0.0.1", keyfile, sdp, password;
     std::array<unsigned char, 6> device{0x02, 0x55, 0x58, 0x50, 0x4c, 0x59};
     unsigned video_port = 5000, audio_port = 5002, port = 0, fps = 60, mtu = 1200, seconds = 0;
     bool audio = true, mdns = true, nohold = true, debug = false, h265 = false, show_help = false;
@@ -60,6 +60,7 @@ void help() {
         "  --mtu BYTES            maximum outgoing RTP datagram size (1200)\n"
         "  --device-id XX:XX:XX:XX:XX:XX  unique, stable receiver identity\n"
         "  --keyfile PATH         persistent pairing key (optional)\n"
+        "  --password PASSWORD    fixed AirPlay access password (disabled by default)\n"
         "  --sdp PATH             write receiver SDP for the outgoing streams\n"
         "  --no-audio             disable audio decoding and RTP output\n"
         "  --no-mdns              do not advertise services (diagnostic use)\n"
@@ -91,6 +92,12 @@ Options parse(int argc, char** argv) {
         else if (arg == "--mtu") o.mtu = number(value(), 64, 65507);
         else if (arg == "--run-seconds") o.seconds = number(value(), 1, 86400);
         else if (arg == "--keyfile") o.keyfile = value();
+        else if (arg == "--password") {
+            o.password = value();
+            if (o.password.empty() || o.password.size() > 64 ||
+                std::any_of(o.password.begin(), o.password.end(), [](unsigned char c) { return c < 0x20 || c == 0x7f; }))
+                throw std::invalid_argument("password must contain 1..64 bytes without control characters");
+        }
         else if (arg == "--sdp") o.sdp = value();
         else if (arg == "--no-audio") o.audio = false;
         else if (arg == "--no-mdns") o.mdns = false;
@@ -160,12 +167,15 @@ struct Receiver {
         }
         int error = 0;
         dns.reset(dnssd_init(options.name.c_str(), int(options.name.size()),
-                            reinterpret_cast<const char*>(options.device.data()), 6, 0, &error));
+                            reinterpret_cast<const char*>(options.device.data()), 6, options.password.empty() ? 0 : 2, &error));
         if (!dns) throw std::runtime_error("could not initialize service discovery: " + std::to_string(error));
         // Match upstream's mirror/audio feature set, without HLS or legacy video playback.
         dnssd_set_airplay_features(dns.get(), 0, 0);
         dnssd_set_airplay_features(dns.get(), 4, 0);
         dnssd_set_airplay_features(dns.get(), 42, int(options.h265)); // SupportsScreenMultiCodec
+        // Match upstream -pw: fixed passwords use SETUP Digest authentication.
+        // Advertising bit 27 makes iPhone request a separate random PIN via SRP.
+        if (!options.password.empty()) dnssd_set_airplay_features(dns.get(), 27, 0);
         // iPhone needs the normal audio capabilities to complete mirror setup,
         // even for video-only output. Removing them leaves it connecting until
         // it tears down the session after about a minute. --no-audio (including
@@ -179,6 +189,13 @@ struct Receiver {
     void start_server() {
         raop_callbacks_t cb{};
         cb.cls = this;
+        if (!options.password.empty()) {
+            cb.passwd = [](void* cls, int* len) {
+                const auto& password = static_cast<Receiver*>(cls)->options.password;
+                *len = int(password.size());
+                return password.c_str();
+            };
+        }
         cb.audio_process = [](void* cls, raop_ntp_t*, audio_decode_struct* data) {
             auto& r = *static_cast<Receiver*>(cls);
             if (!r.options.audio || data->data_len <= 0) return;
