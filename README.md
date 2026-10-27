@@ -94,6 +94,10 @@ destination over UDP. Exit with Ctrl-C or SIGTERM. The receiving application
 should listen on the configured ports before streaming starts. Run `--help` for
 all options.
 
+Legacy pairing advertisement is disabled in all password modes, including without
+a password, to reduce connection delay. The FairPlay handshake and media encryption
+remain enabled.
+
 ### Fixed AirPlay password
 
 Add `--password` to require a password when an iPhone connects:

@@ -73,7 +73,7 @@ def run(binary, audio_enabled, options):
                 assert info["features"] & (1 << 7)  # mirroring
                 assert not info["features"] & (1 << 4)  # no HLS
                 assert bool(info["features"] & (1 << 42)) == h265_enabled
-                assert info["features"] & (1 << 27)  # preserve pairing without --password
+                assert not info["features"] & (1 << 27)  # no legacy pairing delay, even without a password
                 assert "audioFormats" in info
                 # Output policy must not change the AirPlay handshake. Removing
                 # these bits makes iPhone spin and disconnect after ~59 seconds.

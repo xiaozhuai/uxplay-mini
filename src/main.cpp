@@ -180,9 +180,9 @@ struct Receiver {
         dnssd_set_airplay_features(dns.get(), 0, 0);
         dnssd_set_airplay_features(dns.get(), 4, 0);
         dnssd_set_airplay_features(dns.get(), 42, int(options.h265)); // SupportsScreenMultiCodec
-        // Match upstream -pw: fixed and random passwords use SETUP Digest authentication.
-        // Advertising bit 27 makes iPhone request a separate random PIN via SRP.
-        if (options.password_mode()) dnssd_set_airplay_features(dns.get(), 27, 0);
+        // Disable legacy pairing to avoid its extra connection delay, including without a password.
+        // Fixed and random passwords continue to use SETUP Digest authentication.
+        dnssd_set_airplay_features(dns.get(), 27, 0);
         // iPhone needs the normal audio capabilities to complete mirror setup,
         // even for video-only output. Removing them leaves it connecting until
         // it tears down the session after about a minute. --no-audio (including

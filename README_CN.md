@@ -79,6 +79,9 @@ libavcodec/libavutil。
 程序不创建播放窗口，数据通过 UDP 发送到目标地址；Ctrl-C 或 SIGTERM 退出。
 接收方应先监听对应端口。全部参数见 `--help`。
 
+所有密码模式（包括无密码）均关闭旧式配对能力广播，以减少额外连接等待。
+FairPlay 握手及音视频加密仍保留。
+
 ### 固定 AirPlay 密码
 
 添加 `--password`，要求 iPhone 连接时输入指定密码：

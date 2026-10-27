@@ -56,7 +56,7 @@ try:
     assert match, output
     features = int(match[1], 16) | (int(match[2], 16) << 32)
     assert bool(features & (1 << 42)) == h265_enabled, output
-    assert bool(features & (1 << 27)) == (not password_enabled), output
+    assert not features & (1 << 27), output  # legacy pairing is disabled in every password mode
     # DNS-SD and /info must both retain audio negotiation capabilities when
     # audio output is disabled, regardless of FFmpeg being linked or not.
     for bit in (9, 18, 19, 20, 21):

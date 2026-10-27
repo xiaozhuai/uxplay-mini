@@ -22,8 +22,10 @@ Local changes:
 
 - Added mutually exclusive fixed (`--password`) and generated (`--random-password`)
   AirPlay passwords, including password-required records on both mDNS backends.
-  Like upstream `-pw`, both modes clear feature bit 27 so iPhone uses SETUP Digest
-  authentication instead of requesting a random SRP pairing PIN.
+  Like upstream `-pw`, both modes use SETUP Digest authentication instead of
+  requesting a random SRP pairing PIN.
+- Clear feature bit 27 in all password modes, including without a password, to
+  avoid the legacy-pairing connection delay. FairPlay and media encryption remain enabled.
 - Random passwords use the retained upstream generator and PIN display callback.
   Failed authentication proofs, rather than code displays, consume retry attempts;
   regenerated codes are always displayed. Missing client identities and random
