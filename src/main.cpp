@@ -52,7 +52,7 @@ unsigned number(const std::string& value, unsigned min, unsigned max) {
     return result;
 }
 void help() {
-    std::cout << "uxplay-mini 0.1.2 - AirPlay to RTP, without GStreamer\n"
+    std::cout << "uxplay-mini 0.1.3 - AirPlay to RTP, without GStreamer\n"
         "  -n, --name NAME        AirPlay receiver name (default: UxPlay Mini)\n"
         "  --host ADDRESS         numeric RTP destination, IPv4 or IPv6 (127.0.0.1)\n"
         "  --video-port PORT      video RTP port (5000), RTCP at PORT+1\n"
